@@ -9,7 +9,7 @@ usage() {
 	exit 1
 }
 
-packages="ethtool fping kmod-nft-tproxy mptcpd ip-full tc-full kmod-sched kmod-sched-bpf coreutils-base64 sing-box-tiny"
+packages="ethtool fping mptcpd ip-full tc-full kmod-sched kmod-sched-bpf coreutils-base64 sing-box-tiny"
 
 # Parse arguments.
 while [ $# -gt 0 ]; do
@@ -33,7 +33,7 @@ while [ $# -gt 0 ]; do
 		continue
 		;;
 	--v2ray)
-		packages="$packages -sing-box-tiny v2ray-core"
+		packages="$packages -sing-box-tiny v2ray-core kmod-nft-tproxy"
 		v2ray=1
 		shift
 		;;
@@ -89,7 +89,7 @@ BSBF_RESOURCES="https://raw.githubusercontent.com/bondingshouldbefree/bsbf-resou
 # Decide the proxy programme.
 proxy_programme="# sing-box Configuration
 cat <<'EOF' > /etc/sing-box/config.json
-$(curl -s $BSBF_RESOURCES/resources-client/sing-box-tproxy.json \
+$(curl -s $BSBF_RESOURCES/resources-client/sing-box.json \
   | jq --arg SERVER "$server_ipv4" \
        --argjson PORT "$server_port" \
        --arg UUID "$uuid" \
@@ -114,7 +114,26 @@ $(curl -s $BSBF_RESOURCES/resources-client/v2ray.json \
 EOF
 
 uci set v2ray.enabled.enabled='1'
-uci commit v2ray"
+uci commit v2ray
+
+# Add rule to use routing table 100 for transparent proxy traffic.
+uci add network rule
+uci set network.@rule[-1].priority='0'
+uci set network.@rule[-1].lookup='100'
+uci set network.@rule[-1].mark='1'
+
+# Add route to route transparent proxy traffic to the loopback interface.
+uci add network route
+uci set network.@route[-1].interface='loopback'
+uci set network.@route[-1].type='local'
+uci set network.@route[-1].target='0.0.0.0/0'
+uci set network.@route[-1].table='100'
+uci commit network
+
+# nftables Configuration
+cat <<'EOF' > /etc/nftables.d/99-bsbf-proxy.nft
+$(curl -s $BSBF_RESOURCES/resources-client/99-bsbf-proxy-openwrt.nft)
+EOF"
 
 # Decide the TCP-in-UDP object.
 tcp_in_udp_endianness="tcp_in_udp_tc_le.o"
@@ -203,19 +222,6 @@ done
 # forwarding. Use 8.8.8.8 because some ISPs such as rain SA won't reach 1.1.1.1.
 uci add_list dhcp.@dnsmasq[0].server='8.8.8.8'
 
-# Add rule to use routing table 100 for transparent proxy traffic.
-uci add network rule
-uci set network.@rule[-1].priority='0'
-uci set network.@rule[-1].lookup='100'
-uci set network.@rule[-1].mark='1'
-
-# Add route to route transparent proxy traffic to the loopback interface.
-uci add network route
-uci set network.@route[-1].interface='loopback'
-uci set network.@route[-1].type='local'
-uci set network.@route[-1].target='0.0.0.0/0'
-uci set network.@route[-1].table='100'
-
 # Commit changes.
 uci commit dhcp
 uci commit network
@@ -224,11 +230,6 @@ uci commit firewall
 # mptcpd Configuration
 cat <<'EOF' > /etc/mptcpd/mptcpd.conf
 $(curl -s $BSBF_RESOURCES/resources-client/mptcpd.conf)
-EOF
-
-# nftables Configuration
-cat <<'EOF' > /etc/nftables.d/99-bsbf-proxy.nft
-$(curl -s $BSBF_RESOURCES/resources-client/99-bsbf-proxy-openwrt.nft)
 EOF
 
 $proxy_programme
